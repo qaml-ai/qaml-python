@@ -1,5 +1,6 @@
 from appium import webdriver
 from appium.options.ios import XCUITestOptions
+from appium.options.android import UiAutomator2Options
 from appium.webdriver.common.appiumby import AppiumBy
 import re
 import time
@@ -10,67 +11,35 @@ from PIL import Image
 from io import BytesIO
 import requests
 
-def get_serial():
-    system_profiler_output = subprocess.run(["system_profiler", "SPUSBDataType"], capture_output=True, text=True).stdout
-    serial_numbers = re.findall(r'(iPhone|iPad).*?Serial Number: *([^\n]+)', system_profiler_output, re.DOTALL)
-
-    if serial_numbers:
-        first_serial_number = serial_numbers[0][1].strip()
-        modified_serial_number = first_serial_number[:8] + '-' + first_serial_number[8:]
-        return modified_serial_number
-
-class Client:
-    def __init__(self, api_key, driver=None):
+class BaseClient:
+    def __init__(self, api_key):
         self.api_key = api_key
-        if not driver:
-            options = XCUITestOptions()
-            options.udid = get_serial()
-            custom_caps = {
-                    "mjpegScreenshotUrl": "http://localhost:9100"
-            }
-            options.load_capabilities(custom_caps)
-            try:
-                driver = webdriver.Remote('http://localhost:4723', options=options)
-            except:
-                driver = webdriver.Remote('http://localhost:4723/wd/hub', options=options)
-        self.driver = driver
-        self.driver.start_recording_screen()
-        self.driver.update_settings({'waitForIdleTimeout': 0})
-        self.driver.update_settings({'shouldWaitForQuiescence': False})
-        self.driver.update_settings({'maxTypingFrequency': 60})
+        self.driver = None
+        self.platform = None
+
+    def setup_driver(self):
+        pass
 
     def tap_coordinates(self, x, y):
-        self.driver.execute_script("mobile: tap", {"x": x, "y": y})
+        pass
 
     def drag(self, startX, startY, endX, endY):
-        self.driver.execute_script("mobile: dragFromToForDuration", {"fromX": startX, "fromY": startY, "toX": endX, "toY": endY, "duration": 1})
+        pass
 
     def swipe(self, direction):
-        self.driver.execute_script("mobile: swipe", {"direction": direction})
+        pass
 
     def scroll(self, direction):
-        # reverse direction
-        direction_map = {
-            "up": "down",
-            "down": "up",
-            "left": "right",
-            "right": "left"
-        }
-        direction = direction_map[direction]
-        self.driver.execute_script("mobile: swipe", {"direction": direction})
+        pass
 
     def type_text(self, text):
-        application_element = self.driver.find_element(AppiumBy.IOS_PREDICATE, "type == 'XCUIElementTypeApplication'")
-        application_element.send_keys(text)
+        pass
 
-    def sleep(self, seconds):
-        time.sleep(seconds)
+    def sleep(self, duration):
+        time.sleep(duration)
 
     def execute(self, script):
         screenshot = self.driver.get_screenshot_as_base64()
-        start_time = time.time()
-        isKeyboard = self.driver.is_keyboard_shown()
-
         PIL_image = Image.open(BytesIO(base64.b64decode(screenshot)))
         longer_side = max(PIL_image.size)
         aspect_ratio = PIL_image.size[0] / PIL_image.size[1]
@@ -78,11 +47,10 @@ class Client:
         PIL_image = PIL_image.resize(new_size)
         buffered = BytesIO()
         PIL_image.save(buffered, format="PNG")
-
         screenshot = base64.b64encode(buffered.getvalue()).decode("utf-8")
-        input_elements = []
-        payload = {"action": script, "screen_size": self.driver.get_window_size(), "input_elements": input_elements, "screenshot": screenshot}
-        response = requests.post("https://api.camelqa.com", json=payload, headers={"Authorization": f"Bearer {self.api_key}"})
+        payload = {"action": script, "screen_size": self.driver.get_window_size(), "screenshot": screenshot}
+        response = requests.post("https://api.camelqa.com/v1/execute", json=payload, headers={"Authorization": f"Bearer {self.api_key}"})
+        print(response.text)
         actions = response.json()
         available_functions = {
             "tap": self.tap_coordinates,
@@ -96,4 +64,116 @@ class Client:
             function = available_functions[action["name"]]
             arguments = json.loads(action["arguments"])
             function(**arguments)
+
+class AndroidClient(BaseClient):
+    def __init__(self, api_key, driver=None):
+        super().__init__(api_key)
+        self.platform = "Android"
+        if driver:
+            self.driver = driver
+        else:
+            self.setup_driver()
+
+    def setup_driver(self):
+        caps = {'deviceName': 'Android Device', 'automationName': 'UiAutomator2', 'autoGrantPermissions': True,
+                'newCommandTimeout': 600, 'mjpegScreenshotUrl': "http://localhost:4723/stream.mjpeg"}
+        options = UiAutomator2Options().load_capabilities(caps)
+        self.driver = webdriver.Remote('http://localhost:4723', options=options)
+        self.driver.start_recording_screen()
+        self.driver.update_settings({'waitForIdleTimeout': 0, 'shouldWaitForQuiescence': False, 'maxTypingFrequency': 60})
+
+    def tap_coordinates(self, x, y):
+        self.driver.tap([(x, y)], 1)
+
+    def drag(self, startX, startY, endX, endY):
+        self.driver.swipe(startX, startY, endX, endY, 1)
+
+    def swipe(self, direction):
+        window_size = self.driver.get_window_size()
+        left = window_size["width"] * 0.2
+        top = window_size["height"] * 0.2
+        width = window_size["width"] * 0.6
+        height = window_size["height"] * 0.6
+        self.driver.execute_script("mobile: swipeGesture", {"left": left, "top": top, "width": width, "height": height, "direction": direction, percent: 100})
+
+    def scroll(self, direction):
+        direction_map = {"up": "down", "down": "up", "left": "right", "right": "left"}
+        self.swipe(direction_map[direction])
+
+    def type_text(self, text):
+        subprocess.run(["adb", "shell", "input", "text", f"'{text}'"])
+
+class IOSClient(BaseClient):
+    def __init__(self, api_key, driver=None, ios_udid=None):
+        super().__init__(api_key)
+        self.platform = "iOS"
+        if driver:
+            self.driver = driver
+        else:
+            self.setup_driver(ios_udid)
+
+    def setup_driver(self, udid):
+        options = XCUITestOptions()
+        options.udid = udid
+        custom_caps = {"mjpegScreenshotUrl": "http://localhost:9100"}
+        options.load_capabilities(custom_caps)
+        try:
+            self.driver = webdriver.Remote('http://localhost:4723', options=options)
+        except:
+            self.driver = webdriver.Remote('http://localhost:4723/wd/hub', options=options)
+        self.driver.start_recording_screen()
+        self.driver.update_settings({'waitForIdleTimeout': 0, 'shouldWaitForQuiescence': False, 'maxTypingFrequency': 60})
+
+    def tap_coordinates(self, x, y):
+        self.driver.execute_script("mobile: tap", {"x": x, "y": y})
+
+    def drag(self, startX, startY, endX, endY):
+        self.driver.execute_script("mobile: dragFromToForDuration", {"fromX": startX, "fromY": startY, "toX": endX, "toY": endY, "duration": 1})
+
+    def swipe(self, direction):
+        self.driver.execute_script("mobile: swipe", {"direction": direction})
+
+    def scroll(self, direction):
+        direction_map = {"up": "down", "down": "up", "left": "right", "right": "left"}
+        self.driver.execute_script("mobile: swipe", {"direction": direction_map[direction]})
+
+    def type_text(self, text):
+        self.driver.find_element(AppiumBy.IOS_PREDICATE, "type == 'XCUIElementTypeApplication'").send_keys(text)
+
+def Client(api_key, driver=None):
+    def get_ios_udid():
+        system_profiler_output = subprocess.run(["system_profiler", "SPUSBDataType"], capture_output=True, text=True).stdout
+        serial_numbers = re.findall(r'(iPhone|iPad).*?Serial Number: *([^\n]+)', system_profiler_output, re.DOTALL)
+
+        if serial_numbers:
+            first_serial_number = serial_numbers[0][1].strip()
+            modified_serial_number = first_serial_number[:8] + '-' + first_serial_number[8:]
+            return modified_serial_number
+
+    def get_connected_android_devices():
+        result = subprocess.run(["adb", "devices"], capture_output=True, text=True)
+        devices = result.stdout.splitlines()[1:]  # Skip the first line, which is a header
+        connected_devices = [line.split('\t')[0] for line in devices if "device" in line]
+        return connected_devices
+
+    if driver is not None:
+            platform_name = driver.desired_capabilities.get('platformName', '').lower()
+            if platform_name == 'android':
+                print("Using the provided Appium driver for Android.")
+                return AndroidClient(api_key, driver=driver)
+            elif platform_name == 'ios':
+                print("Using the provided Appium driver for iOS.")
+                return IOSClient(api_key, driver=driver)
+            else:
+                raise Exception("Unsupported platform specified in the provided driver's capabilities.")
+
+    android_devices = get_connected_android_devices()
+    if android_devices:
+        return AndroidClient(api_key)
+
+    ios_udid = get_ios_udid()
+    if ios_udid:
+        return IOSClient(api_key, ios_udid=ios_udid)
+
+    raise Exception("No connected devices found or driver provided.")
 
