@@ -1,3 +1,3 @@
 # qaml-python
 
-Control your iOS device with natural language
+Control your iOS and Android devices with natural language
