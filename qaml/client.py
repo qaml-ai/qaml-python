@@ -94,7 +94,7 @@ class AndroidClient(BaseClient):
         top = window_size["height"] * 0.2
         width = window_size["width"] * 0.6
         height = window_size["height"] * 0.6
-        self.driver.execute_script("mobile: swipeGesture", {"left": left, "top": top, "width": width, "height": height, "direction": direction, percent: 100})
+        self.driver.execute_script("mobile: swipeGesture", {"left": left, "top": top, "width": width, "height": height, "direction": direction, "percent": 1.0})
 
     def scroll(self, direction):
         direction_map = {"up": "down", "down": "up", "left": "right", "right": "left"}
