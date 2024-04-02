@@ -151,10 +151,13 @@ def Client(api_key, driver=None):
             return modified_serial_number
 
     def get_connected_android_devices():
-        result = subprocess.run(["adb", "devices"], capture_output=True, text=True)
-        devices = result.stdout.splitlines()[1:]  # Skip the first line, which is a header
-        connected_devices = [line.split('\t')[0] for line in devices if "device" in line]
-        return connected_devices
+        try:
+            result = subprocess.run(["adb", "devices"], capture_output=True, text=True)
+            devices = result.stdout.splitlines()[1:]  # Skip the first line, which is a header
+            connected_devices = [line.split('\t')[0] for line in devices if "device" in line]
+            return connected_devices
+        except:
+            return []
 
     if driver is not None:
             platform_name = driver.desired_capabilities.get('platformName', '').lower()
