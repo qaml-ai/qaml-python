@@ -16,24 +16,25 @@ class BaseClient:
         self.api_key = api_key
         self.driver = None
         self.platform = None
+        self.screen_size = None
 
     def setup_driver(self):
-        pass
+        raise NotImplementedError
 
     def tap_coordinates(self, x, y):
-        pass
+        raise NotImplementedError
 
     def drag(self, startX, startY, endX, endY):
-        pass
+        raise NotImplementedError
 
     def swipe(self, direction):
-        pass
+        raise NotImplementedError
 
     def scroll(self, direction):
-        pass
+        raise NotImplementedError
 
     def type_text(self, text):
-        pass
+        raise NotImplementedError
 
     def sleep(self, duration):
         time.sleep(duration)
@@ -48,7 +49,7 @@ class BaseClient:
         buffered = BytesIO()
         PIL_image.save(buffered, format="PNG")
         screenshot = base64.b64encode(buffered.getvalue()).decode("utf-8")
-        payload = {"action": script, "screen_size": self.driver.get_window_size(), "screenshot": screenshot}
+        payload = {"action": script, "screen_size": self.screen_size, "screenshot": screenshot}
         response = requests.post("https://api.camelqa.com/v1/execute", json=payload, headers={"Authorization": f"Bearer {self.api_key}"})
         print(response.text)
         actions = response.json()
@@ -72,7 +73,15 @@ class AndroidClient(BaseClient):
         if driver:
             self.driver = driver
         else:
-            self.setup_driver()
+            for _ in range(3):
+                try:
+                    self.setup_driver()
+                    break
+                except:
+                    pass
+            else:
+                raise Exception("Failed to setup the driver.")
+        self.screen_size = self.driver.get_window_size()
 
     def setup_driver(self):
         caps = {'deviceName': 'Android Device', 'automationName': 'UiAutomator2', 'autoGrantPermissions': True,
@@ -81,6 +90,8 @@ class AndroidClient(BaseClient):
         self.driver = webdriver.Remote('http://localhost:4723', options=options)
         self.driver.start_recording_screen()
         self.driver.update_settings({'waitForIdleTimeout': 0, 'shouldWaitForQuiescence': False, 'maxTypingFrequency': 60})
+        # get screenshot to test if the driver is working
+        self.driver.get_screenshot_as_base64()
 
     def tap_coordinates(self, x, y):
         self.driver.tap([(x, y)], 1)
@@ -89,11 +100,10 @@ class AndroidClient(BaseClient):
         self.driver.swipe(startX, startY, endX, endY, 1)
 
     def swipe(self, direction):
-        window_size = self.driver.get_window_size()
-        left = window_size["width"] * 0.2
-        top = window_size["height"] * 0.2
-        width = window_size["width"] * 0.6
-        height = window_size["height"] * 0.6
+        left = self.window_size["width"] * 0.2
+        top = self.window_size["height"] * 0.2
+        width = self.window_size["width"] * 0.6
+        height = self.window_size["height"] * 0.6
         self.driver.execute_script("mobile: swipeGesture", {"left": left, "top": top, "width": width, "height": height, "direction": direction, "percent": 1.0})
 
     def scroll(self, direction):
@@ -110,7 +120,16 @@ class IOSClient(BaseClient):
         if driver:
             self.driver = driver
         else:
-            self.setup_driver(ios_udid)
+            # try 3 times to setup the driver
+            for _ in range(3):
+                try:
+                    self.setup_driver(ios_udid)
+                    break
+                except:
+                    pass
+            else:
+                raise Exception("Failed to setup the driver.")
+        self.screen_size = self.driver.get_window_size()
 
     def setup_driver(self, udid):
         options = XCUITestOptions()
@@ -121,8 +140,10 @@ class IOSClient(BaseClient):
             self.driver = webdriver.Remote('http://localhost:4723', options=options)
         except:
             self.driver = webdriver.Remote('http://localhost:4723/wd/hub', options=options)
-        self.driver.start_recording_screen()
+        self.driver.start_recording_screen(forceRestart=True)
         self.driver.update_settings({'waitForIdleTimeout': 0, 'shouldWaitForQuiescence': False, 'maxTypingFrequency': 60})
+        # get screenshot to test if the driver is working
+        self.driver.get_screenshot_as_base64()
 
     def tap_coordinates(self, x, y):
         self.driver.execute_script("mobile: tap", {"x": x, "y": y})
