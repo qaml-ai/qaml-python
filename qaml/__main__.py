@@ -20,6 +20,8 @@ def main():
             except EOFError:
                 print("")
                 break
+            except Exception as e:
+                print(f"Error: {e}")
     else:
         args_str = " ".join(sys.argv[1:])
         print(f"Running command: {args_str}")

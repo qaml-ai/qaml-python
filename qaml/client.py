@@ -11,6 +11,9 @@ from PIL import Image
 from io import BytesIO
 import requests
 
+class QAMLExecException(Exception):
+    pass
+
 class BaseClient:
     def __init__(self, api_key):
         self.api_key = api_key
@@ -39,6 +42,9 @@ class BaseClient:
     def sleep(self, duration):
         time.sleep(duration)
 
+    def report_error(self, reason):
+        raise QAMLExecException(reason)
+
     def execute(self, script):
         screenshot = self.driver.get_screenshot_as_base64()
         PIL_image = Image.open(BytesIO(base64.b64decode(screenshot)))
@@ -59,7 +65,9 @@ class BaseClient:
             "swipe": self.swipe,
             "scroll": self.scroll,
             "type_text": self.type_text,
-            "sleep": self.sleep
+            "sleep": self.sleep,
+            "report_error": self.report_error,
+            "switch_to_app": self.switch_to_app,
         }
         for action in actions:
             function = available_functions[action["name"]]
@@ -160,6 +168,9 @@ class IOSClient(BaseClient):
 
     def type_text(self, text):
         self.driver.find_element(AppiumBy.IOS_PREDICATE, "type == 'XCUIElementTypeApplication'").send_keys(text)
+
+    def switch_to_app(self, bundle_id):
+        self.driver.activate_app(bundle_id)
 
 def Client(api_key, driver=None):
     def get_ios_udid():
