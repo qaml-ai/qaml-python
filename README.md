@@ -6,12 +6,20 @@ Control your iOS and Android devices with natural language
 Make sure you have Appium installed first.
 
 ### macOS
-`brew install appium`
+```bash
+brew install appium
+```
 
 ### all other OSes
-`npm i -g appium`
+```bash
+npm i -g appium
+```
 
-Now just `pip install qaml`
+### Install qaml
+Now install qaml
+```bash
+pip install qaml
+```
 
 ## Examples
 ### Python
@@ -32,14 +40,20 @@ q.execute("tap go")
 ```
 
 ### repl
-`export QAML_API_KEY=<API_KEY>`
+```bash
+export QAML_API_KEY=<API_KEY>
+```
 
-`$ qaml`
+```bash
+qaml
+```
 
 This will start a repl in your shell. You can issue natural language commands to get a feel for qaml.
 
 ### One-off commands
-`$ qaml tap the send button`
+```bash
+qaml tap the send button
+```
 
 ## Docs
 For more details visit our [docs](https://docs.camelqa.com/introduction)
