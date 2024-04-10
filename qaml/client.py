@@ -10,16 +10,20 @@ import json
 from PIL import Image
 from io import BytesIO
 import requests
+import os
 
 class QAMLExecException(Exception):
     pass
 
 class BaseClient:
     def __init__(self, api_key):
-        self.api_key = api_key
+        self.api_key = api_key or os.environ.get("QAML_API_KEY")
         self.driver = None
         self.platform = None
         self.screen_size = None
+        self.req_session = requests.Session()
+        self.req_session.headers.update({"Authorization": f"Bearer {api_key}"})
+        self.context = ''
 
     def setup_driver(self):
         raise NotImplementedError
@@ -45,8 +49,13 @@ class BaseClient:
     def report_error(self, reason):
         raise QAMLExecException(reason)
 
-    def execute(self, script):
+    def set_context(self, context):
+        self.context = context
+
+    def get_screenshot(self):
+        start_time = time.time()
         screenshot = self.driver.get_screenshot_as_base64()
+        print(f"Screenshot took {time.time() - start_time} seconds.")
         PIL_image = Image.open(BytesIO(base64.b64decode(screenshot)))
         longer_side = max(PIL_image.size)
         aspect_ratio = PIL_image.size[0] / PIL_image.size[1]
@@ -55,8 +64,12 @@ class BaseClient:
         buffered = BytesIO()
         PIL_image.save(buffered, format="PNG")
         screenshot = base64.b64encode(buffered.getvalue()).decode("utf-8")
-        payload = {"action": script, "screen_size": self.screen_size, "screenshot": screenshot}
-        response = requests.post("https://api.camelqa.com/v1/execute", json=payload, headers={"Authorization": f"Bearer {self.api_key}"})
+        return screenshot
+
+    def execute(self, script):
+        screenshot = self.get_screenshot()
+        payload = {"action": script, "screen_size": self.screen_size, "screenshot": screenshot, "platform": self.platform, "extra_context": self.context}
+        response = self.req_session.post("https://api.camelqa.com/v1/execute", json=payload, headers={"Authorization": f"Bearer {self.api_key}"})
         print(response.text)
         actions = response.json()
         available_functions = {
@@ -73,6 +86,12 @@ class BaseClient:
             function = available_functions[action["name"]]
             arguments = json.loads(action["arguments"])
             function(**arguments)
+
+    def agent(self, task):
+        screenshot = self.get_screenshot()
+        payload = {"task": task, "platform": self.platform, "screenshot": screenshot}
+        response = self.req_session.post("https://api.camelqa.com/v1/agent", json=payload)
+        print(response.text)
 
 class AndroidClient(BaseClient):
     def __init__(self, api_key, driver=None):
@@ -95,7 +114,20 @@ class AndroidClient(BaseClient):
         caps = {'deviceName': 'Android Device', 'automationName': 'UiAutomator2', 'autoGrantPermissions': True,
                 'newCommandTimeout': 600, 'mjpegScreenshotUrl': "http://localhost:4723/stream.mjpeg"}
         options = UiAutomator2Options().load_capabilities(caps)
-        self.driver = webdriver.Remote('http://localhost:4723', options=options)
+
+        def create_driver(options):
+            try:
+                return webdriver.Remote('http://localhost:4723', options=options)
+            except:
+                return webdriver.Remote('http://localhost:4723/wd/hub', options=options)
+        try:
+            self.driver = webdriver.Remote('http://localhost:4723', options=options)
+        except:
+            # Try again without mjpeg-consumer dependency
+            caps.pop('mjpegScreenshotUrl')
+            options = UiAutomator2Options().load_capabilities(caps)
+            self.driver = create_driver(options)
+
         self.driver.start_recording_screen()
         self.driver.update_settings({'waitForIdleTimeout': 0, 'shouldWaitForQuiescence': False, 'maxTypingFrequency': 60})
         # get screenshot to test if the driver is working
@@ -144,10 +176,20 @@ class IOSClient(BaseClient):
         options.udid = udid
         custom_caps = {"mjpegScreenshotUrl": "http://localhost:9100"}
         options.load_capabilities(custom_caps)
+
+        def create_driver(options):
+            try:
+                return webdriver.Remote('http://localhost:4723', options=options)
+            except:
+                return webdriver.Remote('http://localhost:4723/wd/hub', options=options)
         try:
-            self.driver = webdriver.Remote('http://localhost:4723', options=options)
+            self.driver = create_driver(options)
         except:
-            self.driver = webdriver.Remote('http://localhost:4723/wd/hub', options=options)
+            # Try again without mjpeg-consumer dependency
+            options = XCUITestOptions()
+            options.udid = udid
+            self.driver = create_driver(options)
+
         self.driver.start_recording_screen(forceRestart=True)
         self.driver.update_settings({'waitForIdleTimeout': 0, 'shouldWaitForQuiescence': False, 'maxTypingFrequency': 60})
         # get screenshot to test if the driver is working
