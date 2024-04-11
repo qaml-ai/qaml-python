@@ -53,9 +53,7 @@ class BaseClient:
         self.context = context
 
     def get_screenshot(self):
-        start_time = time.time()
         screenshot = self.driver.get_screenshot_as_base64()
-        print(f"Screenshot took {time.time() - start_time} seconds.")
         PIL_image = Image.open(BytesIO(base64.b64decode(screenshot)))
         longer_side = max(PIL_image.size)
         aspect_ratio = PIL_image.size[0] / PIL_image.size[1]
@@ -70,7 +68,7 @@ class BaseClient:
         screenshot = self.get_screenshot()
         payload = {"action": script, "screen_size": self.screen_size, "screenshot": screenshot, "platform": self.platform, "extra_context": self.context}
         response = self.req_session.post("https://api.camelqa.com/v1/execute", json=payload, headers={"Authorization": f"Bearer {self.api_key}"})
-        print(response.text)
+        print(f"Action: {script} - Response: {response.text}")
         actions = response.json()
         available_functions = {
             "tap": self.tap_coordinates,
@@ -154,9 +152,10 @@ class AndroidClient(BaseClient):
         subprocess.run(["adb", "shell", "input", "text", f"'{text}'"])
 
 class IOSClient(BaseClient):
-    def __init__(self, api_key, driver=None, ios_udid=None):
+    def __init__(self, api_key, driver=None, ios_udid=None, use_mjpeg=True):
         super().__init__(api_key)
         self.platform = "iOS"
+        self.use_mjpeg = use_mjpeg
         if driver:
             self.driver = driver
         else:
@@ -174,8 +173,10 @@ class IOSClient(BaseClient):
     def setup_driver(self, udid):
         options = XCUITestOptions()
         options.udid = udid
-        custom_caps = {"mjpegScreenshotUrl": "http://localhost:9100"}
-        options.load_capabilities(custom_caps)
+        options.newCommandTimeout = 600
+        if self.use_mjpeg:
+            custom_caps = {"mjpegScreenshotUrl": "http://localhost:9100"}
+            options.load_capabilities(custom_caps)
 
         def create_driver(options):
             try:
@@ -190,7 +191,9 @@ class IOSClient(BaseClient):
             options.udid = udid
             self.driver = create_driver(options)
 
-        self.driver.start_recording_screen(forceRestart=True)
+        if self.use_mjpeg:
+            print("Using MJPEG screenshot.")
+            self.driver.start_recording_screen(forceRestart=True)
         self.driver.update_settings({'waitForIdleTimeout': 0, 'shouldWaitForQuiescence': False, 'maxTypingFrequency': 60})
         # get screenshot to test if the driver is working
         self.driver.get_screenshot_as_base64()
@@ -214,7 +217,7 @@ class IOSClient(BaseClient):
     def switch_to_app(self, bundle_id):
         self.driver.activate_app(bundle_id)
 
-def Client(api_key, driver=None):
+def Client(api_key, driver=None, use_mjpeg=True):
     def get_ios_udid():
         system_profiler_output = subprocess.run(["system_profiler", "SPUSBDataType"], capture_output=True, text=True).stdout
         serial_numbers = re.findall(r'(iPhone|iPad).*?Serial Number: *([^\n]+)', system_profiler_output, re.DOTALL)
@@ -250,7 +253,7 @@ def Client(api_key, driver=None):
 
     ios_udid = get_ios_udid()
     if ios_udid:
-        return IOSClient(api_key, ios_udid=ios_udid)
+        return IOSClient(api_key, ios_udid=ios_udid, use_mjpeg=use_mjpeg)
 
     raise Exception("No connected devices found or driver provided.")
 
