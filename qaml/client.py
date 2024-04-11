@@ -173,7 +173,7 @@ class IOSClient(BaseClient):
     def setup_driver(self, udid):
         options = XCUITestOptions()
         options.udid = udid
-        options.newCommandTimeout = 600
+        options.new_command_timeout = 60 * 5 # 5 minutes
         if self.use_mjpeg:
             custom_caps = {"mjpegScreenshotUrl": "http://localhost:9100"}
             options.load_capabilities(custom_caps)
