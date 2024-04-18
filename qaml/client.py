@@ -64,6 +64,21 @@ class BaseClient:
         screenshot = base64.b64encode(buffered.getvalue()).decode("utf-8")
         return screenshot
 
+    def _execute_function(self, function_name, **kwargs):
+        available_functions = {
+            "tap": self.tap_coordinates,
+            "drag": self.drag,
+            "swipe": self.swipe,
+            "scroll": self.scroll,
+            "type_text": self.type_text,
+            "sleep": self.sleep,
+            "report_error": self.report_error,
+            "switch_to_app": self.switch_to_app,
+        }
+        function = available_functions.get(function_name)
+        if function:
+            function(**kwargs)
+
     def execute(self, script):
         screenshot = self.get_screenshot()
         payload = {"action": script, "screen_size": self.screen_size, "screenshot": screenshot, "platform": self.platform, "extra_context": self.context}
@@ -81,15 +96,22 @@ class BaseClient:
             "switch_to_app": self.switch_to_app,
         }
         for action in actions:
-            function = available_functions[action["name"]]
-            arguments = json.loads(action["arguments"])
-            function(**arguments)
+            self._execute_function(action["name"], **json.loads(action["arguments"]))
 
     def agent(self, task):
-        screenshot = self.get_screenshot()
-        payload = {"task": task, "platform": self.platform, "screenshot": screenshot}
-        response = self.req_session.post("https://api.camelqa.com/v1/agent", json=payload)
-        print(response.text)
+        progress = []
+        while True:
+            screenshot = self.get_screenshot()
+            payload = {"task": task, "progress": progress, "platform": self.platform, "screenshot": screenshot}
+            response = self.req_session.post("https://api.camelqa.com/v1/agent", json=payload)
+            response_json = response.json()
+            status = response_json["status"]
+            progress += response_json["progress"]
+            actions = response_json["actions"]
+            if status != "in_progress":
+                return status, progress
+            for action in actions:
+                self.execute(action)
 
 class AndroidClient(BaseClient):
     def __init__(self, api_key, driver=None):
@@ -152,10 +174,11 @@ class AndroidClient(BaseClient):
         subprocess.run(["adb", "shell", "input", "text", f"'{text}'"])
 
 class IOSClient(BaseClient):
-    def __init__(self, api_key, driver=None, ios_udid=None, use_mjpeg=True):
+    def __init__(self, api_key, driver=None, ios_udid=None, use_mjpeg=True, use_hid_typing=False):
         super().__init__(api_key)
         self.platform = "iOS"
         self.use_mjpeg = use_mjpeg
+        self.use_hid_typing = use_hid_typing
         if driver:
             self.driver = driver
         else:
@@ -212,12 +235,57 @@ class IOSClient(BaseClient):
         self.driver.execute_script("mobile: swipe", {"direction": direction_map[direction]})
 
     def type_text(self, text):
-        self.driver.find_element(AppiumBy.IOS_PREDICATE, "type == 'XCUIElementTypeApplication'").send_keys(text)
+        if self.use_hid_typing:
+            self.type_text_hid(text)
+        else:
+            try:
+                self.driver.find_element(AppiumBy.IOS_PREDICATE, "type == 'XCUIElementTypeApplication'").send_keys(text)
+            except:
+                self.type_text_hid(text)
+
+    def type_text_hid(self, text):
+        special_chars = {
+                ' ': 0x2C, '!': 0x1E, '@': 0x1F, '#': 0x20, '$': 0x21, '%': 0x22,
+                '^': 0x23, '&': 0x24, '*': 0x25, '(': 0x26, ')': 0x27, '-': 0x2D,
+                '_': 0x2D, '=': 0x2E, '+': 0x2E, '[': 0x2F, '{': 0x2F, ']': 0x30,
+                '}': 0x30, '\\': 0x31, '|': 0x31, ';': 0x33, ':': 0x33, '\'': 0x34,
+                '"': 0x34, '`': 0x35, '~': 0x35, ',': 0x36, '<': 0x36, '.': 0x37,
+                '>': 0x37, '/': 0x38, '?': 0x38
+                }
+
+        # Base HID usage codes
+        hid_base_lower = 0x04  # HID usage for 'a'
+        hid_base_upper = 0x04  # HID usage for 'A'
+        hid_base_number = 0x1E  # HID usage for '1'
+
+        for char in text:
+            usage = None
+            shift = False
+
+            if 'a' <= char <= 'z':
+                usage = hid_base_lower + (ord(char) - ord('a'))
+            elif 'A' <= char <= 'Z':
+                usage = hid_base_upper + (ord(char) - ord('A'))
+                shift = True
+            elif '1' <= char <= '9':
+                usage = hid_base_number + (ord(char) - ord('1'))
+            elif char == '0':
+                usage = 0x27
+            elif char in special_chars:
+                usage = special_chars[char]
+                # Determine if shift needs to be pressed for special characters
+                shift = char in '~!@#$%^&*()_+{}|:"<>?'
+
+            if usage is None:
+                continue
+
+            self.driver.execute_script("mobile: performIoHidEvent", {"page": 0x07, "usage": usage, "durationSeconds": 0.005})  # Key down
+            self.driver.execute_script("mobile: performIoHidEvent", {"page": 0x07, "usage": 0x00, "durationSeconds": 0.005})  # Key up
 
     def switch_to_app(self, bundle_id):
         self.driver.activate_app(bundle_id)
 
-def Client(api_key, driver=None, use_mjpeg=True):
+def Client(api_key, driver=None, use_mjpeg=True, use_hid_typing=False):
     def get_ios_udid():
         system_profiler_output = subprocess.run(["system_profiler", "SPUSBDataType"], capture_output=True, text=True).stdout
         serial_numbers = re.findall(r'(iPhone|iPad).*?Serial Number: *([^\n]+)', system_profiler_output, re.DOTALL)
@@ -237,15 +305,15 @@ def Client(api_key, driver=None, use_mjpeg=True):
             return []
 
     if driver is not None:
-            platform_name = driver.desired_capabilities.get('platformName', '').lower()
-            if platform_name == 'android':
-                print("Using the provided Appium driver for Android.")
-                return AndroidClient(api_key, driver=driver)
-            elif platform_name == 'ios':
-                print("Using the provided Appium driver for iOS.")
-                return IOSClient(api_key, driver=driver)
-            else:
-                raise Exception("Unsupported platform specified in the provided driver's capabilities.")
+        platform_name = driver.capabilities.get("platformName").lower()
+        if platform_name == 'android':
+            print("Using the provided Appium driver for Android.")
+            return AndroidClient(api_key, driver=driver)
+        elif platform_name == 'ios':
+            print("Using the provided Appium driver for iOS.")
+            return IOSClient(api_key, driver=driver, use_hid_typing=use_hid_typing)
+        else:
+            raise Exception("Unsupported platform specified in the provided driver's capabilities.")
 
     android_devices = get_connected_android_devices()
     if android_devices:
@@ -253,7 +321,7 @@ def Client(api_key, driver=None, use_mjpeg=True):
 
     ios_udid = get_ios_udid()
     if ios_udid:
-        return IOSClient(api_key, ios_udid=ios_udid, use_mjpeg=use_mjpeg)
+        return IOSClient(api_key, ios_udid=ios_udid, use_mjpeg=use_mjpeg, use_hid_typing=use_hid_typing)
 
     raise Exception("No connected devices found or driver provided.")
 
