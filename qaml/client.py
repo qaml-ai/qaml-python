@@ -120,14 +120,14 @@ class AndroidClient(BaseClient):
         if driver:
             self.driver = driver
         else:
-            for _ in range(3):
+            max_retry = 3
+            for i in range(max_retry):
                 try:
                     self.setup_driver()
                     break
-                except:
-                    pass
-            else:
-                raise Exception("Failed to setup the driver.")
+                except Exception as e:
+                    if i == max_retry - 1:
+                        raise e
         self.screen_size = self.driver.get_window_size()
 
     def setup_driver(self):
