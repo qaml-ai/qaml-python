@@ -174,7 +174,7 @@ class AndroidClient(BaseClient):
         subprocess.run(["adb", "shell", "input", "text", f"'{text}'"])
 
 class IOSClient(BaseClient):
-    def __init__(self, api_key, driver=None, ios_udid=None, use_mjpeg=True, use_hid_typing=False):
+    def __init__(self, api_key, driver=None, use_mjpeg=True, use_hid_typing=False):
         super().__init__(api_key)
         self.platform = "iOS"
         self.use_mjpeg = use_mjpeg
@@ -182,6 +182,15 @@ class IOSClient(BaseClient):
         if driver:
             self.driver = driver
         else:
+            def get_ios_udid():
+                system_profiler_output = subprocess.run(["system_profiler", "SPUSBDataType"], capture_output=True, text=True).stdout
+                serial_numbers = re.findall(r'(iPhone|iPad).*?Serial Number: *([^\n]+)', system_profiler_output, re.DOTALL)
+
+                if serial_numbers:
+                    first_serial_number = serial_numbers[0][1].strip()
+                    modified_serial_number = first_serial_number[:8] + '-' + first_serial_number[8:]
+                    return modified_serial_number
+            ios_udid = get_ios_udid()
             # try 3 times to setup the driver
             for _ in range(3):
                 try:
@@ -195,7 +204,8 @@ class IOSClient(BaseClient):
 
     def setup_driver(self, udid):
         options = XCUITestOptions()
-        options.udid = udid
+        if udid:
+            options.udid = udid
         options.new_command_timeout = 60 * 5 # 5 minutes
         if self.use_mjpeg:
             custom_caps = {"mjpegScreenshotUrl": "http://localhost:9100"}
@@ -286,14 +296,6 @@ class IOSClient(BaseClient):
         self.driver.activate_app(bundle_id)
 
 def Client(api_key, driver=None, use_mjpeg=True, use_hid_typing=False):
-    def get_ios_udid():
-        system_profiler_output = subprocess.run(["system_profiler", "SPUSBDataType"], capture_output=True, text=True).stdout
-        serial_numbers = re.findall(r'(iPhone|iPad).*?Serial Number: *([^\n]+)', system_profiler_output, re.DOTALL)
-
-        if serial_numbers:
-            first_serial_number = serial_numbers[0][1].strip()
-            modified_serial_number = first_serial_number[:8] + '-' + first_serial_number[8:]
-            return modified_serial_number
 
     def get_connected_android_devices():
         try:
@@ -319,9 +321,8 @@ def Client(api_key, driver=None, use_mjpeg=True, use_hid_typing=False):
     if android_devices:
         return AndroidClient(api_key)
 
-    ios_udid = get_ios_udid()
-    if ios_udid:
-        return IOSClient(api_key, ios_udid=ios_udid, use_mjpeg=use_mjpeg, use_hid_typing=use_hid_typing)
-
-    raise Exception("No connected devices found or driver provided.")
+    try:
+        return IOSClient(api_key, use_mjpeg=use_mjpeg, use_hid_typing=use_hid_typing)
+    except:
+        raise Exception("No connected devices found or driver provided.")
 
