@@ -24,6 +24,15 @@ class BaseClient:
         self.req_session = requests.Session()
         self.req_session.headers.update({"Authorization": f"Bearer {api_key}"})
         self.context = ''
+        self.available_functions = {
+            "tap": self.tap_coordinates,
+            "drag": self.drag,
+            "swipe": self.swipe,
+            "scroll": self.scroll,
+            "type_text": self.type_text,
+            "sleep": self.sleep,
+            "report_error": self.report_error
+        }
 
     def setup_driver(self):
         raise NotImplementedError
@@ -65,17 +74,7 @@ class BaseClient:
         return screenshot
 
     def _execute_function(self, function_name, **kwargs):
-        available_functions = {
-            "tap": self.tap_coordinates,
-            "drag": self.drag,
-            "swipe": self.swipe,
-            "scroll": self.scroll,
-            "type_text": self.type_text,
-            "sleep": self.sleep,
-            "report_error": self.report_error,
-            "switch_to_app": self.switch_to_app,
-        }
-        function = available_functions.get(function_name)
+        function = self.available_functions.get(function_name)
         if function:
             function(**kwargs)
 
@@ -85,16 +84,6 @@ class BaseClient:
         response = self.req_session.post("https://api.camelqa.com/v1/execute", json=payload, headers={"Authorization": f"Bearer {self.api_key}"})
         print(f"Action: {script} - Response: {response.text}")
         actions = response.json()
-        available_functions = {
-            "tap": self.tap_coordinates,
-            "drag": self.drag,
-            "swipe": self.swipe,
-            "scroll": self.scroll,
-            "type_text": self.type_text,
-            "sleep": self.sleep,
-            "report_error": self.report_error,
-            "switch_to_app": self.switch_to_app,
-        }
         for action in actions:
             self._execute_function(action["name"], **json.loads(action["arguments"]))
 
@@ -176,6 +165,7 @@ class AndroidClient(BaseClient):
 class IOSClient(BaseClient):
     def __init__(self, api_key, driver=None, use_mjpeg=True, use_hid_typing=False):
         super().__init__(api_key)
+        self.available_functions["switch_to_app"] = self.switch_to_app
         self.platform = "iOS"
         self.use_mjpeg = use_mjpeg
         self.use_hid_typing = use_hid_typing
