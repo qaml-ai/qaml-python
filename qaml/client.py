@@ -16,14 +16,15 @@ class QAMLExecException(Exception):
     pass
 
 class BaseClient:
-    def __init__(self, api_key):
+    def __init__(self, api_key, api_base_url="https://api.camelqa.com"):
         self.api_key = api_key or os.environ.get("QAML_API_KEY")
+        self.api_base_url = os.environ.get("QAML_API_BASE_URL", api_base_url)
         self.driver = None
         self.platform = None
         self.screen_size = None
         self.req_session = requests.Session()
         self.req_session.headers.update({"Authorization": f"Bearer {api_key}"})
-        self.context = ''
+        self.system_prompt = None
         self.available_functions = {
             "tap": self.tap_coordinates,
             "drag": self.drag,
@@ -58,9 +59,6 @@ class BaseClient:
     def report_error(self, reason):
         raise QAMLExecException(reason)
 
-    def set_context(self, context):
-        self.context = context
-
     def get_screenshot(self):
         screenshot = self.driver.get_screenshot_as_base64()
         PIL_image = Image.open(BytesIO(base64.b64decode(screenshot)))
@@ -80,19 +78,39 @@ class BaseClient:
 
     def execute(self, script):
         screenshot = self.get_screenshot()
-        payload = {"action": script, "screen_size": self.screen_size, "screenshot": screenshot, "platform": self.platform, "extra_context": self.context}
-        response = self.req_session.post("https://api.camelqa.com/v1/execute", json=payload, headers={"Authorization": f"Bearer {self.api_key}"})
+        """
+        now = time.time()
+        appium_page_source = self.driver.page_source
+        print(f"Page source: {appium_page_source}", time.time() - now)
+        """
+        payload = {"action": script, "screen_size": self.screen_size, "screenshot": screenshot, "platform": self.platform, "extra_context": self.system_prompt}
+        response = self.req_session.post(f"{self.api_base_url}/v1/execute", json=payload, headers={"Authorization": f"Bearer {self.api_key}"})
         print(f"Action: {script} - Response: {response.text}")
-        actions = response.json()
-        for action in actions:
-            self._execute_function(action["name"], **json.loads(action["arguments"]))
+        try:
+            actions = response.json()
+            for action in actions:
+                self._execute_function(action["name"], **json.loads(action["arguments"]))
+        except Exception as e:
+            print(e)
+            pass
+
+    def assert_condition(self, script):
+        screenshot = self.get_screenshot()
+        payload = {"assertion": script, "screen_size": self.screen_size, "screenshot": screenshot, "platform": self.platform, "extra_context": self.system_prompt}
+        response = self.req_session.post(f"{self.api_base_url}/v1/assert", json=payload, headers={"Authorization": f"Bearer {self.api_key}"})
+        print(f"Action: {script} - Response: {response.text}")
+        assertion = response.json()[0]
+        args = json.loads(assertion["arguments"])
+        if not args["result"]:
+            raise QAMLExecException(f"Assertion failed: {script}. Reason: {args['reason']}")
+        return response.json()
 
     def agent(self, task):
         progress = []
         while True:
             screenshot = self.get_screenshot()
             payload = {"task": task, "progress": progress, "platform": self.platform, "screenshot": screenshot}
-            response = self.req_session.post("https://api.camelqa.com/v1/agent", json=payload)
+            response = self.req_session.post(f"{self.api_base_url}/v1/agent", json=payload)
             response_json = response.json()
             status = response_json["status"]
             progress += response_json["progress"]
