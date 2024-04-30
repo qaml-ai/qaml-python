@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qaml"
-version = "0.0.7.9"
+version = "0.0.8"
 authors = [
     {name = "Miguel Salinas", email = "miguel@camelqa.com"},
 ]
@@ -27,6 +27,7 @@ dependencies = [
 
 [project.scripts]
 qaml = "qaml.__main__:main"
+qaml-agent = "qaml.cli_agent:main"
 
 [tool.setuptools.package-data]
 "src" = ["*.txt", "*.dat"]
