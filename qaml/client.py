@@ -78,10 +78,8 @@ class BaseClient:
         if function:
             function(**kwargs)
 
-    def get_accessibility_elements(self):
-        print("Getting accessibility elements.")
-        if (not self.use_accessibility_elements):
-            print("Accessibility elements are disabled.")
+    def get_accessibility_elements(self, use_accessibility_elements=False):
+        if (not self.use_accessibility_elements and not use_accessibility_elements):
             return []
         appium_page_source = self.driver.page_source
         root = ET.fromstring(appium_page_source)
