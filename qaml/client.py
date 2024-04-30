@@ -11,6 +11,7 @@ from PIL import Image
 from io import BytesIO
 import requests
 import os
+import xml.etree.ElementTree as ET
 
 class QAMLExecException(Exception):
     pass
@@ -22,6 +23,7 @@ class BaseClient:
         self.driver = None
         self.platform = None
         self.screen_size = None
+        self.use_accessibility_elements = False
         self.req_session = requests.Session()
         self.req_session.headers.update({"Authorization": f"Bearer {api_key}"})
         self.system_prompt = None
@@ -76,20 +78,31 @@ class BaseClient:
         if function:
             function(**kwargs)
 
+    def get_accessibility_elements(self):
+        print("Getting accessibility elements.")
+        if (not self.use_accessibility_elements):
+            print("Accessibility elements are disabled.")
+            return []
+        appium_page_source = self.driver.page_source
+        root = ET.fromstring(appium_page_source)
+        accessibility_elements = root.findall(".//*[@accessible='true']")
+        accessibility_elements = [element for element in accessibility_elements if element.tag != "XCUIElementTypeStaticText" and element.tag != "android.widget.TextView" and element.tag != "XCUIElementTypeKey"]
+        accessibility_elements = [{"left": int(element.attrib["x"]), "top": int(element.attrib["y"]), "width": int(element.attrib["width"]), "height": int(element.attrib["height"]), "type": element.attrib["type"], "label": element.attrib.get("label", "")} for element in accessibility_elements]
+        # remove elements with no label
+        accessibility_elements = [element for element in accessibility_elements if element["label"] and element["label"].strip()]
+        return accessibility_elements
+
     def execute(self, script):
         screenshot = self.get_screenshot()
-        """
-        now = time.time()
-        appium_page_source = self.driver.page_source
-        print(f"Page source: {appium_page_source}", time.time() - now)
-        """
-        payload = {"action": script, "screen_size": self.screen_size, "screenshot": screenshot, "platform": self.platform, "extra_context": self.system_prompt}
+        accessibility_elements = self.get_accessibility_elements()
+        payload = {"action": script, "screen_size": self.screen_size, "screenshot": screenshot, "platform": self.platform, "extra_context": self.system_prompt, "accessibility_elements": accessibility_elements}
         response = self.req_session.post(f"{self.api_base_url}/v1/execute", json=payload, headers={"Authorization": f"Bearer {self.api_key}"})
         print(f"Action: {script} - Response: {response.text}")
         try:
             actions = response.json()
             for action in actions:
                 self._execute_function(action["name"], **json.loads(action["arguments"]))
+                time.sleep(0.5)
         except Exception as e:
             print(e)
             pass
@@ -101,24 +114,46 @@ class BaseClient:
         print(f"Action: {script} - Response: {response.text}")
         assertion = response.json()[0]
         args = json.loads(assertion["arguments"])
-        if not args["result"]:
+        if args.get("result") == False:
             raise QAMLExecException(f"Assertion failed: {script}. Reason: {args['reason']}")
         return response.json()
 
-    def agent(self, task):
+    def task(self, task, max_steps=10):
         progress = []
+        iterations = 0
+        yield f"Task: {task}"
         while True:
+            if iterations >= max_steps:
+                raise QAMLExecException(f"Task execution took too many steps. Max steps: {max_steps}")
+            iterations += 1
+            time.sleep(0.5)
             screenshot = self.get_screenshot()
-            payload = {"task": task, "progress": progress, "platform": self.platform, "screenshot": screenshot}
-            response = self.req_session.post(f"{self.api_base_url}/v1/agent", json=payload)
+            accessibility_elements = self.get_accessibility_elements()
+            payload = {"task": task, "progress": progress, "platform": self.platform, "screenshot": screenshot, "extra_context": self.system_prompt, "screen_size": self.screen_size, "accessibility_elements": accessibility_elements}
+            response = self.req_session.post(f"{self.api_base_url}/v1/execute-task", json=payload)
             response_json = response.json()
-            status = response_json["status"]
-            progress += response_json["progress"]
-            actions = response_json["actions"]
-            if status != "in_progress":
-                return status, progress
-            for action in actions:
-                self.execute(action)
+            function_called = False
+            completed = False
+            for function in response_json:
+                args = json.loads(function["arguments"])
+                if function["name"] == "update_progress":
+                    yield f"Progress: {args['progress']}"
+                    progress.append(args["progress"])
+                    continue
+                if function["name"] == "task_completed":
+                    if args["result"] == "success":
+                        completed = True
+                    else:
+                        raise QAMLExecException(f"Task execution failed. Progress: {progress}")
+                function_called = True
+                self._execute_function(function["name"], **args)
+                yield f"{function['name']}({args})"
+                progress.append(f'{function["name"]}({args})')
+            if completed:
+                break
+            if not function_called:
+                pass
+                #raise QAMLExecException("Task execution failed. No function called.")
 
 class AndroidClient(BaseClient):
     def __init__(self, api_key, driver=None):
@@ -178,15 +213,14 @@ class AndroidClient(BaseClient):
         self.swipe(direction_map[direction])
 
     def type_text(self, text):
-        subprocess.run(["adb", "shell", "input", "text", f"'{text}'"])
+        self.driver.execute_script("mobile: shell", {"command": f"input text '{text}'"})
 
 class IOSClient(BaseClient):
-    def __init__(self, api_key, driver=None, use_mjpeg=True, use_hid_typing=False):
+    def __init__(self, api_key, driver=None, use_mjpeg=True):
         super().__init__(api_key)
         self.available_functions["switch_to_app"] = self.switch_to_app
         self.platform = "iOS"
         self.use_mjpeg = use_mjpeg
-        self.use_hid_typing = use_hid_typing
         if driver:
             self.driver = driver
         else:
@@ -303,7 +337,7 @@ class IOSClient(BaseClient):
     def switch_to_app(self, bundle_id):
         self.driver.activate_app(bundle_id)
 
-def Client(api_key, driver=None, use_mjpeg=True, use_hid_typing=False):
+def Client(api_key, driver=None, use_mjpeg=True, use_hid_typing=False, use_accessibility_elements=False):
 
     def get_connected_android_devices():
         try:
@@ -318,19 +352,29 @@ def Client(api_key, driver=None, use_mjpeg=True, use_hid_typing=False):
         platform_name = driver.capabilities.get("platformName").lower()
         if platform_name == 'android':
             print("Using the provided Appium driver for Android.")
-            return AndroidClient(api_key, driver=driver)
+            client = AndroidClient(api_key, driver=driver)
+            client.use_accessibility_elements = use_accessibility_elements
+            return client
         elif platform_name == 'ios':
             print("Using the provided Appium driver for iOS.")
-            return IOSClient(api_key, driver=driver, use_hid_typing=use_hid_typing)
+            client = IOSClient(api_key, driver=driver)
+            client.use_accessibility_elements = use_accessibility_elements
+            client.use_hid_typing = use_hid_typing
+            return client
         else:
             raise Exception("Unsupported platform specified in the provided driver's capabilities.")
 
     android_devices = get_connected_android_devices()
     if android_devices:
-        return AndroidClient(api_key)
+        client = AndroidClient(api_key)
+        client.use_accessibility_elements = use_accessibility_elements
+        return client
 
     try:
-        return IOSClient(api_key, use_mjpeg=use_mjpeg, use_hid_typing=use_hid_typing)
+        client = IOSClient(api_key, use_mjpeg=use_mjpeg)
+        client.use_accessibility_elements = use_accessibility_elements
+        client.use_hid_typing = use_hid_typing
+        return client
     except:
         raise Exception("No connected devices found or driver provided.")
 
