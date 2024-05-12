@@ -91,6 +91,8 @@ class BaseClient:
         return accessibility_elements
 
     def execute(self, script):
+        if not script.strip():
+            return
         screenshot = self.get_screenshot()
         accessibility_elements = self.get_accessibility_elements()
         payload = {"action": script, "screen_size": self.screen_size, "screenshot": screenshot, "platform": self.platform, "extra_context": self.system_prompt, "accessibility_elements": accessibility_elements}
@@ -214,15 +216,18 @@ class AndroidClient(BaseClient):
         self.driver.execute_script("mobile: shell", {"command": f"input text '{text}'"})
 
 class IOSClient(BaseClient):
-    def __init__(self, api_key, driver=None, use_mjpeg=True):
+    def __init__(self, api_key, driver=None, use_mjpeg=True, udid=None):
         super().__init__(api_key)
         self.available_functions["switch_to_app"] = self.switch_to_app
         self.platform = "iOS"
         self.use_mjpeg = use_mjpeg
+        self.udid = udid
         if driver:
             self.driver = driver
         else:
             def get_ios_udid():
+                if udid:
+                    return udid
                 system_profiler_output = subprocess.run(["system_profiler", "SPUSBDataType"], capture_output=True, text=True).stdout
                 serial_numbers = re.findall(r'(iPhone|iPad).*?Serial Number: *([^\n]+)', system_profiler_output, re.DOTALL)
 
@@ -335,7 +340,7 @@ class IOSClient(BaseClient):
     def switch_to_app(self, bundle_id):
         self.driver.activate_app(bundle_id)
 
-def Client(api_key, driver=None, use_mjpeg=True, use_hid_typing=False, use_accessibility_elements=False):
+def Client(api_key, driver=None, use_mjpeg=True, use_hid_typing=False, use_accessibility_elements=False, udid=None):
 
     def get_connected_android_devices():
         try:
@@ -369,7 +374,7 @@ def Client(api_key, driver=None, use_mjpeg=True, use_hid_typing=False, use_acces
         return client
 
     try:
-        client = IOSClient(api_key, use_mjpeg=use_mjpeg)
+        client = IOSClient(api_key, use_mjpeg=use_mjpeg, udid=udid)
         client.use_accessibility_elements = use_accessibility_elements
         client.use_hid_typing = use_hid_typing
         return client
